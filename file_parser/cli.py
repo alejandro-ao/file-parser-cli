@@ -1,15 +1,20 @@
 from __future__ import annotations
 
-import argparse
 import contextlib
 import io
 import json
 import sys
 from pathlib import Path
-from typing import Sequence
+from typing import Annotated, Literal, NoReturn, Sequence
 
+import typer
 from pypdf import PdfReader
 from pypdf.errors import PdfReadError, PdfStreamError
+
+app = typer.Typer(
+    help="Extract content from common file formats.",
+    no_args_is_help=True,
+)
 
 
 def _ensure_file(path: Path) -> None:
@@ -147,103 +152,84 @@ def _read_json(path: Path, compact: bool = False, encoding: str = "utf-8") -> st
     return json.dumps(payload, indent=2, ensure_ascii=False)
 
 
-def _write_output(text: str) -> int:
+def _write_output(text: str) -> None:
     if not text:
-        return 0
+        return
     sys.stdout.write(text)
     if not text.endswith("\n"):
         sys.stdout.write("\n")
-    return 0
 
 
-def _handle_pdf(args: argparse.Namespace) -> int:
-    text = extract_pdf_text(
-        pdf_path=Path(args.path),
-        pages=args.pages,
-        ocr=args.ocr,
-        ocr_dpi=args.ocr_dpi,
-    )
-    return _write_output(text)
+def _fail(error: Exception) -> NoReturn:
+    typer.echo(f"error: {error}", err=True)
+    raise typer.Exit(code=2)
 
 
-def _handle_text(args: argparse.Namespace) -> int:
-    return _write_output(_read_text(Path(args.path), encoding=args.encoding))
-
-
-def _handle_json(args: argparse.Namespace) -> int:
-    return _write_output(
-        _read_json(Path(args.path), compact=args.compact, encoding=args.encoding)
-    )
-
-
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        prog="file-parser",
-        description="Extract content from common file formats.",
-    )
-    subparsers = parser.add_subparsers(dest="command", required=True)
-
-    pdf_parser = subparsers.add_parser("pdf", help="Extract text from a PDF file")
-    pdf_parser.add_argument("path", help="Path to the PDF file")
-    pdf_parser.add_argument(
-        "--pages",
-        default=None,
-        help="Page selection like '1-3,7'. Pages are 1-indexed.",
-    )
-    pdf_parser.add_argument(
-        "--ocr",
-        choices=("never", "auto", "always"),
-        default="never",
-        help="OCR mode. Use 'auto' for image-only pages.",
-    )
-    pdf_parser.add_argument(
-        "--ocr-dpi",
-        type=int,
-        default=200,
-        help="Render DPI when OCR is enabled.",
-    )
-    pdf_parser.set_defaults(handler=_handle_pdf)
-
-    text_parser = subparsers.add_parser("text", help="Read a plain text file")
-    text_parser.add_argument("path", help="Path to the text file")
-    text_parser.add_argument(
-        "--encoding",
-        default="utf-8",
-        help="Text encoding. Defaults to utf-8.",
-    )
-    text_parser.set_defaults(handler=_handle_text)
-
-    json_parser = subparsers.add_parser("json", help="Read and normalize a JSON file")
-    json_parser.add_argument("path", help="Path to the JSON file")
-    json_parser.add_argument(
-        "--compact",
-        action="store_true",
-        help="Output compact JSON with no whitespace.",
-    )
-    json_parser.add_argument(
-        "--encoding",
-        default="utf-8",
-        help="Text encoding. Defaults to utf-8.",
-    )
-    json_parser.set_defaults(handler=_handle_json)
-
-    return parser
-
-
-def main(argv: Sequence[str] | None = None) -> int:
-    parser = build_parser()
-    args = parser.parse_args(argv)
-    handler = getattr(args, "handler", None)
-    if handler is None:
-        parser.print_help()
-        raise SystemExit(2)
-
+@app.command("pdf", help="Extract text from a PDF file")
+def pdf_command(
+    path: Annotated[Path, typer.Argument(help="Path to the PDF file")],
+    pages: Annotated[
+        str | None,
+        typer.Option(help="Page selection like '1-3,7'. Pages are 1-indexed."),
+    ] = None,
+    ocr: Annotated[
+        Literal["never", "auto", "always"],
+        typer.Option(help="OCR mode. Use 'auto' for image-only pages."),
+    ] = "never",
+    ocr_dpi: Annotated[
+        int,
+        typer.Option(help="Render DPI when OCR is enabled."),
+    ] = 200,
+) -> None:
     try:
-        code = handler(args)
-    except (FileNotFoundError, json.JSONDecodeError, RuntimeError, ValueError) as exc:
-        parser.exit(status=2, message=f"error: {exc}\n")
-    return code
+        text = extract_pdf_text(
+            pdf_path=path,
+            pages=pages,
+            ocr=ocr,
+            ocr_dpi=ocr_dpi,
+        )
+    except (FileNotFoundError, RuntimeError, ValueError) as exc:
+        _fail(exc)
+    _write_output(text)
+
+
+@app.command("text", help="Read a plain text file")
+def text_command(
+    path: Annotated[Path, typer.Argument(help="Path to the text file")],
+    encoding: Annotated[
+        str,
+        typer.Option(help="Text encoding. Defaults to utf-8."),
+    ] = "utf-8",
+) -> None:
+    try:
+        text = _read_text(path, encoding=encoding)
+    except (FileNotFoundError, ValueError, UnicodeDecodeError) as exc:
+        _fail(exc)
+    _write_output(text)
+
+
+@app.command("json", help="Read and normalize a JSON file")
+def json_command(
+    path: Annotated[Path, typer.Argument(help="Path to the JSON file")],
+    compact: Annotated[
+        bool,
+        typer.Option(help="Output compact JSON with no whitespace."),
+    ] = False,
+    encoding: Annotated[
+        str,
+        typer.Option(help="Text encoding. Defaults to utf-8."),
+    ] = "utf-8",
+) -> None:
+    try:
+        text = _read_json(path, compact=compact, encoding=encoding)
+    except (FileNotFoundError, ValueError, json.JSONDecodeError) as exc:
+        _fail(exc)
+    _write_output(text)
+
+def main(argv: Sequence[str] | None = None) -> None:
+    command_args = list(argv) if argv is not None else None
+    app(args=command_args, prog_name="file-parser")
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    main()
