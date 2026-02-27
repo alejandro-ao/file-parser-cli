@@ -1,0 +1,25 @@
+[build-system]
+requires = ["hatchling>=1.27.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "file-parser"
+version = "0.1.0"
+description = "Lightweight CLI for extracting content from files"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "pypdf>=5.2.0",
+]
+
+[project.optional-dependencies]
+ocr = [
+    "pypdfium2>=4.30.0",
+    "rapidocr-onnxruntime>=1.4.4",
+]
+
+[project.scripts]
+file-parser = "file_parser.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["file_parser"]
